@@ -1,0 +1,31 @@
+{
+  "scopeName": "source.spike2",
+  "patterns": [
+    {
+      "name": "comment.line.double-slash.spike2",
+      "match": "//.*$"
+    },
+    {
+      "name": "comment.block.spike2",
+      "begin": "/\\*",
+      "end": "\\*/"
+    },
+    {
+      "name": "keyword.control.spike2",
+      "match": "\\b(func|proc|end|return|if|then|else|endif|for|to|next|while|wend|repeat|until|case|endcase|break|continue|and|or|not|band|bor|bxor|mod|step|view)\\b"
+    },
+    {
+      "name": "constant.numeric.spike2",
+      "match": "\\b\\d+(\\.\\d+)?\\b"
+    },
+    {
+      "name": "string.quoted.double.spike2",
+      "begin": "\"",
+      "end": "\""
+    }
+  ],
+  "repository": {},
+  "name": "Spike2 Script",
+  "fileTypes": ["s2s"],
+  "uuid": "b7d0b6f4-5d52-11e9-8647-d663bd873d93"
+}

@@ -1,0 +1,27 @@
+{
+  "name": "spike2-syntax",
+  "displayName": "Spike2 Script Syntax Highlighting",
+  "description": "Provides syntax highlighting for Spike2 .s2s scripts",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.50.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "spike2",
+        "aliases": ["Spike2 Script", "spike2"],
+        "extensions": [".s2s"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "spike2",
+        "scopeName": "source.spike2",
+        "path": "./syntaxes/spike2.tmLanguage.json"
+      }
+    ]
+  }
+}
