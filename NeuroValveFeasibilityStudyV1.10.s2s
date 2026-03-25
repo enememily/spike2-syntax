@@ -1,0 +1,2089 @@
+
+'Requires at least Spike2 v11.04
+
+'Set to 0 to enable all features
+Const Debug% := 0; '1 = do not use. Switches off some features for testing inc pain threshold. 
+Const Monitor% := 0; 'Allows the slow sample rate and additonal window to show stim pulses online
+
+'Output consts
+Const Rate%:= 250000;      'Output sample rate Max 250000
+Const BinSz := 1.0/Rate%;
+Const OutWaveTLen := 0.0038;  'Output Waveform shapes section length
+Const DAC% := 0;              'Analogue output to use
+Const SeqWaveCtrl% := 2;      'Allows only the script to control sequence and waveform output
+
+'Slider consts
+Const MaxPLev := 9.8; 'Max tolerance level in channel units
+Const MaxPDur% := 3.0; 'Three seconds 
+
+'Sampling vars
+Var Data%; 'Data file handle
+Var DataDup%; 'Duplicate data view
+Var Seq%; 'Text sequenceer file handle
+Var SavePath$; 'Folder for autosaving data files
+Var Samp% :=0; 'Sampling flag
+Var Finish% := 0;  'Flg for end of stim sequence
+Var EarlyFin := 1200;
+Var TotalTime;
+Var LTime; 'Time we last looked for temperature TextMarks
+Var TempT; 'For temp channel. Looks every second.
+Var GotBaseMean;
+Var Fname$; 'File name for saving data
+VAr DigMk% := 32;
+Var LastPainLev%; 'For TextMark pain level printout.
+
+Var PainCh% := 2, DS5CurrentCh% := 1, DS5VoltFB% := 3, TrigTest% := 4, SigChange%, Info%, TempMemCh%;
+Var DopFluxCh1% := 6, DopTempCh1% := 7;
+Var DopFluxCh2% := 8, DopTempCh2% := 9;
+Var DopFluxCh3% := 10, DopTempCh3% := 11;
+Var DopFluxCh4% := 12, DopTempCh4% := 13;
+Var DopFluxCh5% := 14, DopTempCh5% := 15;
+Var DopFluxCh6% := 16, DopTempCh6% := 17;
+Var TMark% := 30; 'TextMark channel for temperature
+Var TempChan% := 5;
+
+Var Port% := 3; 'Temperature sensor port
+Var TList%[6];
+
+Var GlobalIdx% := 0; 'Index for the profile to use
+Var OutOrder%[8];  'Order of profiles
+
+'Waveform output vars
+Var Library%; 'View containing shapes
+Var Silent%, RampMem%, SquareMem%, SineMem%;
+Var Out[0], OutPoints%[0], OutCycles%[0], OutType%[0], OutGaps%[0]; 'Output profile list
+Var WaveType% := 1;
+Var BuffSz := Rate%/10;
+Var Freq := 180;    'Output frequency in Hz
+Var DS5CurRange% := 10;      'DS5 current range +/-10, 25 or 50mA
+Var CurStartLev := 1;   'output starting level in mA
+Var CurEndLev;
+Var SecLen% := 2;       'Waveform 'burst' length 
+Var IntensityInc := 1; 
+Var NextOut$;    'Next key to output
+Var idx% := 0; 'Position in Out[] array
+'Var Gaps% := 0;       'Flag for gaps between stimuli intensities. 1 = Yes, 0 = No
+'Var GapLen% := 5;     'Length of gpa between waveform outut 'bursts
+Var MaxStimDur;
+Var BaselineLen% := 5, RecoveryLen%:= 10;
+
+'Dialog vars
+Var Error%, ErrorFlag% := 0, Msg%;
+Var PID$, LastPID$; 'Participant I.D
+Var ElecType%; 'Electrode type and name
+Var PWidth;              'Pulse width
+Var TrainFreq, TrainWidth;
+var NumProf%, StimGrp1[2], ID$, NumStimProf%, VisitGrp1[13], VisitGrp2[13], VisitGrp3[13], VisitGrp4[13], VisitGrp5[13], VisitGrp6[13], VisitGrp7[13], VisitGrp8[13];
+Var EType%[2], WType%[2], Fr[2], Pwth[2],IntInc[2],IntInt[2], TrFr[2], TrWdth[2], Mdur[2], CurRng%[2], BandRTimes%[4], CStLev[2], CEndLev[2], ModeType%[1];
+Var ModeSelect% := 30;
+Var ModeType$[4] := {"Continuous","Continuous stepped","Gap","Gap stepped"};
+
+Var ElecType$[5] := {"Ring", "Stud", "Bar", "Needle", "Pad"};   'Electrode types    
+Var WaveType$[4] := {"Silent","Triangle", "Square", "Sine"};    'Wavefrom shape
+Var StimCurR%[3] := {10, 25, 50};                               'DS5 current range selection
+Var StimCurR$[3] := {"+/-10mA", "+/-25mA", "+/-50mA"};          'DS5 current range selection (Dialog)
+Var Group%[9];                                                  'Visit dialog profile groups
+Var CurDlgEnt%[8], NextDlgEnt%[8];                              'Current and next stim profile values
+Var GrpSel%, GrpNext%; 'Start trial dlg selected group and next group
+Const Jpeg$ := View(app(3)).FileName$(-1)+"Output map.jpg";
+
+
+Const PFreqRng[2] := {80, 200}; 'Pulse frequency allowed range
+Const PWidthRng[2] := {0.08, 3.8};  'Pulse width allowed range
+Const IntIncRng[2] := {0, 100};    'Pulse increment allowed range
+Const IntIntRng[2] := {0, 1200};   'Pulse interval allowed range
+Const TrainFreqRng[2] := {0.000, 1.00}; 'Train frequency allowed range
+Const TrainWidthRng[2] := {0, 100}; 'Train frequency allowed range
+Const MaxDurRng[2] := {2, 1200};   'Max stimulation allowed range
+Const BaselineRng[2] := {0, 100};   'Baseline time allowed range
+Const RecoveryRng[2] := {0, 100};  'Recovery time allowed range
+Const u1401Range% := 10; '1401 input/output range
+#include <GHutils.s2s>
+
+ HideApps();
+
+Toolbartext("");
+
+View(app(3)).Windowvisible(0);
+
+'CreateShapes%();
+'VisitDlg%();
+'StimProfDlg%();
+'StartTrialDlg%();
+
+DoToolbar();   'Try it out
+halt;
+
+Func DoToolbar()    'Set your own name...
+ToolbarClear();     'Remove any old buttons
+ToolbarSet(0, "", Idle%);                   ' Idle routine
+ToolbarSet(1, "&Quit", Quit%);    'This button returns its number
+ToolbarSet(2, "Programme Stimulation Profiles", Setup%);   'Link to function
+ToolbarSet(3, "New Study Visit", VisitDlg%); 
+ToolbarSet(5, "Start trial", Sample%);   'Link to function
+ToolbarSet(7, "Close data views", TidyData%);
+'ToolbarSet(7, "Restart", Sample%);   'Link to function
+
+'ToolbarEnable(3, 0);
+
+ToolbarEnable(5, 0);
+ToolbarEnable(7, 0);
+return Toolbar("Select...", 1023);
+end;
+
+Func Idle%()   'Button 0 routine
+'PrintLog("\nIdle%");
+Var State% := SampleStatus();
+
+'If Finish% = -1 then debug(); endif
+docase 
+    Case State% = -1 then
+    If Samp% = 1 then;
+    
+        'If SampleStatus() = -1 then
+            'CheckButtons%();
+            'Yield();
+            NumberDigMarks%(DigMk%);
+            Samp% := 0;
+        endif
+            
+'        else
+'        If Data% > 0 then
+'            View(data%);    
+'            FileClose(1); 
+'            Data% := -1;
+'            Tidy%(State%);
+'            endif    
+    
+'    endif
+    
+
+Case State% > -1 and State% < 2 then
+    'CheckButtons%();
+    Yield();
+    
+
+Case State% = 2 then
+    If Finish% = 0 then
+    CheckPlay%(State%);
+    endif    
+        
+    If Debug% = 0 then
+        CheckPainCh%();
+    endif
+    
+    If Viewkind(Data%) = 0 then
+        
+        If View(Data%).Maxtime() > TempT+1 then
+        GetTempData%();    
+            'CheckButtons%();
+        TempT+=1;    
+        Yield();
+        endif
+
+        If GotBaseMean = 0 then
+            If Maxtime() >= BaselineLen% then
+                GetBaseMean%();
+                GotBaseMean := 1;
+            endif
+        endif
+        
+    endif 
+    
+
+
+endcase 
+
+    
+
+return 1;  'This leaves toolbar active
+end;
+
+'Check where we are with the outputs 
+Func CheckPlay%(State%);
+'PrintLog("\nCheckplay%");
+Var Curr$ := PlayWaveStatus$();
+View(data%);
+
+If Curr$ = "" then
+If Maxtime() > MDur[1]+1+RecoveryLen% or Maxtime() > EarlyFin + RecoveryLen% then 'If exceeded the maximum run time
+    'PlayWaveLink$(Key$, Chr$(0));
+    Var T := Maxtime();
+    Finish% := 1;
+    PlayWaveStop(0); 'To ensure we do not leave the output activated
+       State% := FileSaving%(1, State%);
+         
+    endif
+endif    
+
+If Finish% = 1 and PlayWaveStatus$() = "" and State% = 2 then
+    PlayWaveStop(0); 'To ensure we do not leave the output activated
+    State% := FileSaving%(2, State%);
+endif    
+
+'If Finish% = 1 and Maxtime() > EarlyFin + RecoveryLen% then
+'    SampleStop();
+'Endif
+
+If NextOut$ <> Curr$ then
+Var Slot%;    
+    
+    If Curr$ = "1" then
+        Slot% := 2;
+    else
+        Slot% := 1;
+    endif
+    
+    'Scale waveform and update
+    If Finish% = 0 then
+        SetOutput%(Slot%);
+        'Printlog("\n%s\t%s", Curr$, NextOut$);
+        NextOut$ := Curr$;
+    endif
+    Yield();
+    
+endif
+            
+Return State%
+end
+
+Func CheckPainCh%();
+var TCode%[4] := {1,0,0,0};
+
+If samplestatus()= 2 then
+    View(data%);
+    
+Var MaxT := Maxtime(PainCh%);
+    
+    If MaxT < MaxPDur% then return 1 endif
+
+    Var PMean := Chanmeasure(PainCh%, 2, MaxT-MaxPDur%, MaxT);
+    Var IMean := ChanValue(PainCh%, MaxT);
+    If IMean > 9.5 then IMean := 10; endif
+    View(Info%).InfoSettings(Print$("Sensation %d", Imean));
+    Var CurPainLev% := Val(Print$("Sensation %d", Imean));
+    If CurPainLev% <> LastPainLev% then
+        SampleText(Print$("Sensation %d", CurPainLev%, TCode%[]));
+        LastPainLev% := CurPainLev%;
+endif        
+    'View(Info%).InfoSettings(Print$("Sensation %d", PMean));
+If Debug% = 0 then
+        
+        If PMean >= MaxPLev then
+        'If PMean >= MaxPLev and Finish% = 0 then
+            PlayWaveStop(0); 'Stop after the cycle (3.8ms) finishes
+            Samplekey("H"); 'Halt the sequencer
+            Samplekey("R"); 'Jump to recovery time
+            
+            EarlyFin := Maxtime();
+            Finish% := 1;
+            View(Info%).InfoSettings(Print$("Stimulation stopping"));
+            While Maxtime() < Earlyfin + RecoveryLen% do yield(0.01) wend
+            PlayWaveStop(0);
+            Samplestop();
+            NumberDigMarks%(DigMk%);
+            View(Info%);
+            FileClose(0, -1);
+
+          'MUST jump to recovery period then stop as normal.  
+            'ADD revovery as third slot.
+            
+    endif  
+endif    
+endif
+Return 1
+end
+
+Func Change%(item%);
+Var Profile$;
+Var Settings$[16];
+
+'If item% = 1 then
+
+    Profile$ := LoadSaveToRegistry$(Dlgvalue(1)+1, 0, "");  'Read profile
+    ReadSetup(",",",",",",",",",");    
+    ReadStr(Profile$, Settings$[]);
+    
+        If Profile$ > "" then    
+        '     NumProf%, Etype%[1],WType%[1],Fr[1], PWth[1],IntInc[1],IntInt[1],TrFr[1],TrWdth[1],Mdur[1],CurRng%[1],BandRTimes%[1],BandRTimes%[3], Mode%
+       'Decode(); 
+        NumProf%        := Val(Settings$[0]);
+        Etype%[1]       := Val(Settings$[1]);  
+        WType%[1]       := Val(Settings$[2]);  
+        Fr[1]           := Val(Settings$[3]); 
+        PWth[1]         := Val(Settings$[4]);  
+        IntInc[1]       := Val(Settings$[5]);  
+        IntInt[1]       := Val(Settings$[6]);
+        TrFr[1]         := Val(Settings$[7]);
+        TrWdth[1]       := Val(Settings$[8]);
+        Mdur[1]         := Val(Settings$[9]);
+        CurRng%[1]      := Val(Settings$[10]);
+        BandRTimes%[1]  := Val(Settings$[11]);
+        BandRTimes%[3]  := Val(Settings$[12]);
+        CStLev[1]       := Val(Settings$[13]);
+        CEndLev[1]      := Val(Settings$[14]);
+        ModeType%[0]    := Val(Settings$[15]);
+    endif  
+    
+ DlgValue$(TList%[0], Print$("Pulse Frequency (Hz): %.2f", Val(Settings$[3]))); 
+ DlgValue$(TList%[1], Print$("Waveform: %s", WaveType$[WType%[1]+1]));
+ DlgValue$(TList%[2], Print$("Electrode type: %S", ElecType$[Etype%[1]]));
+ DlgValue$(TList%[3], Print$("Intensity increment (mA): %.2f", IntInc[1]));
+ DlgValue$(TList%[4], Print$("Train frequency (Hz): %.2f", TrFr[1]));
+ DlgValue$(TList%[5], Print$("Max duration (s): %.2f", Mdur[1]));
+    
+Return 1
+end
+
+
+
+Func Setup%()   'Button 2 routine
+    StimProfDlg%();
+return 1;  'This leaves toolbar active
+end;
+
+Func Sample%()   'Button 3 routine
+Var NumButt% := ToolbarSet();
+
+If NumButt% = 5 then
+    If samp% = 1 then
+        SampleStop();
+        NumberDigMarks%(DigMk%);
+        ToolbarSet(5, "START trial", Sample%);   'Link to function
+        Samp% := 0;
+        ToolbarEnable(2, 1);
+        ToolbarEnable(3, 1);
+        return 1
+'        else
+'       ToolbarSet(5, "STOP trial", Sample%);   'Link to function 
+'        Samp% := 1;
+'        'Return 1;
+    endif    
+   
+    Idx% := 0;
+    
+var ok%,PList$[10], PNum%;
+Var i%;
+Var TList$[6];
+
+'For i% := 0 to Len(PList$[])- 1 do
+'    PList$[i%] := Print$("Profile %d", i%+1);
+'next    
+    
+     ok% := StartTrialDlg%(); 
+
+    If ok% = 0 then
+        return 1
+    endif 
+    
+    'If GlobalIdx% < 0 then GlobalIdx% := 0; endif
+    
+    PNum% := OutOrder%[GlobalIdx%];
+    
+    CreateShapes%(); 'Create the waveform output library
+    GetSettings%(PNum%); 'Retrieve the settings for profile N
+    SampleSetup%();    'Create the sampling configuration
+    SetupPlaywaveAreas%();  'Setup playwave areas in 1401
+    CreatePresentationOrder%(IntInc[1]); 'Create the order of presentation
+    Warnings%();
+    ConstFileName$();
+    
+    
+    LTime := -1; 'Reset time for textmark decode
+    Data% := FileNew(0, 1);
+    
+    If Data% <= 0 then
+        Message(Print$("Sampling failed. %s", Error$(Data%))); 
+        return 1
+    endif
+    
+    WindowTitle$(ConstFileName$());
+    
+    XRange(0, 10);
+    
+    Yrange(PainCh%, -0.5, 10.5);
+    ChanColourSet(PainCh%, 1,1.000, 0.000, 0.000);   ' Channel primary colour:   2 Sensation
+    ChanPenWidth(PainCh%, 4.5);
+    
+    
+    YRange(DS5CurrentCh%, (DS5CurRange%*-1)-0.5, DS5CurRange%+0.5);
+    
+    ChanHide(-1);
+
+ViewExtraTime(2); 'Set x axis extra time for sampling
+SigChange% := VirtualChan(0, ""); 'Create new virtual channel
+ChanShow(SigChange%); 'Make it visible
+ChanTitle$(SigChange%, "Sig Bld Chng");
+VirtualChan(SigChange%, Print$("Ch(%d)<0", DopFluxCh2%), 0, 0.01, 0);  'Edit virtual channel
+    
+    Chanshow(DopFluxCh6%);
+    Chanshow(DopFluxch2%);
+    ChanOrder(DopFluxCh6%, -1, DopFluxCh2%);   'Move selected channels
+    Chanorder(DopFluxCh2%, -1, SigChange%);
+    Chanshow(DS5CurrentCh%);
+    Chanorder(SigChange%, -1, DS5CurrentCh%);
+    ChanShow(DS5VoltFB%);
+    Chanorder(DS5CurrentCh%, -1, DS5VoltFB%);
+    Chanshow(PainCh%);
+    Chanorder(DS5VoltFB%, -1, PainCh%);
+    
+    Chanshow(TrigTest%);
+    Chanshow(SampleChaninfo(-3));
+     Window(0, 0, 70, 100);
+    
+    YAxisMode(8192, 1,8, 0);
+    
+
+Info%:=InfoOpen(0, 1); 'Create new visible Info window
+Window(4, 80, 28, 98);
+View(Info%).InfoSettings("Sensation", 40+64);
+    
+    
+    View(Data%);
+    
+    DataDup% := WindowDuplicate();
+    View(DataDup%);
+    Window(70, 0, 100, 100);
+    Chanhide(-1);
+    
+    'If ChanKind(TMark%) = 8 then    'If there is a temperature channel...
+    TempChan% := Channew(TempChan%, 7, 1); 
+    ChanTitle$(TempChan%, "Room Temp");
+    ChanUnits$(TempChan%, "DegC");
+    Yrange(TempChan%, 18, 25);
+    Chanshow(TempChan%);
+    TempMemCh% := Memchan(7, 1);
+    Chanshow(TempMemCh%);
+    
+    
+   ' endif
+    
+    ChanShow(DopFluxCh1%);
+    ChanShow(DopTempCh1%);
+    ChanShow(DopFluxCh2%);
+    ChanShow(DopTempCh2%);
+    ChanShow(DopFluxCh3%);
+    ChanShow(DopTempCh3%);
+    ChanShow(DopFluxCh4%);
+    ChanShow(DopTempCh4%);
+    ChanShow(DopFluxCh5%);
+    ChanShow(DopTempCh5%);
+    ChanShow(DopFluxCh6%);
+    ChanShow(DopTempCh6%);
+    Chanorder(-1);   'Order the channels top to bottom starting low.
+    WindowVisible(1);
+    
+    GetGoing();
+else
+    
+    If PlayWaveStatus$() <> "" then
+        PlaywaveStop(0);
+        SampleKey("0");
+    endif   
+    
+'    SampleAbort();    
+'    Idx% := 0;
+'    Finish% := 0;
+'    'ToolbarSet(3, "Start trial", Sample%);   'Link to function
+'    Sample%();
+''    SampleStart();
+''    GetGoing();
+'    ToolbarEnable(7, 1);
+endif    
+    
+return 1;  'This leaves toolbar active
+end;
+
+Proc GetGoing();
+'Printlog("\nGetGoing%");
+    FrontView(Data%);
+Finish% := SampleStart(); 'If zero we are going.
+Samp% := 1;
+    'ToolbarSet(5, "STOP trial", Sample%);
+    While SampleStatus() <> 1 do Yield();  wend
+    TempT := 0;
+    SetOutput%(1);
+        ToolbarSet(5, "STOP trial", Sample%);   'Link to function 
+        Samp% := 1;
+        ToolbarEnable(2, 0);
+        ToolbarEnable(3, 0);
+    
+    'PlaywavePoints("1", Outpoints%[0]);
+    'PlayWaveCycles("1", OutCycles%[0]);
+    
+    SampleKey("G");
+    NextOut$ := "2";
+    GotBaseMean := 0;
+    Return 
+    end
+
+
+Func SampleSetup%();
+var err%;
+
+Var Scale%; 'Scaling for Current readback channel
+Var TempPort%;
+Var DS5SampleRate%;
+
+SampleClear();
+FilePathSet(SavePath$, 3);
+SampleAutoFile(1);
+'Temp Sensor 2400 Baud, 8 bits, no parity, 1 or 2 stop bits
+'DS18S20 sensor + AS3145C serial board (Quasar electronics
+
+If Serialopen(Port%) = 0 then 'If default COM port opens okay
+    TempPort% := Port%;
+ 
+else    
+    TempPort% := DetectSerialPorts%();  'otherwise allow slection of COM port
+endif  
+
+If TempPort% > 0 then    'Create the TextMark channel
+    Err% := SampleTextMark(80,TempPort%,"\r",2400, 8,0, 1,0,1); 'Channel 30
+    SampleTitle$(TMark%, "Temp marker");
+endif    
+
+ 
+    
+'Current DS5
+If Monitor% = 0 then
+    DS5SampleRate% := 100000; ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+    else
+    DS5SampleRate% := 5000;
+endif    
+    SampleWaveform(DS5CurrentCh%, 0, DS5SampleRate%);
+
+    SampleWaveform(DS5VoltFB%, 2, DS5SampleRate%);
+
+    SampleCalibrate(DS5VoltFB%, "Volts", 20, 0, 0);
+    SampleTitle$(DS5VoltFB%, "DS5 Volt");
+
+Scale% := GetCurrentRange%();     
+SampleCalibrate(DS5CurrentCh%, "mA", 10, 0, 0);
+SampleTitle$(DS5CurrentCh%, "DS5 current");
+
+'Pain slider
+SampleWaveform(PainCh%, 1, 10);
+SampleCalibrate(PainCh%, "Scale", -1, 10);
+SampleTitle$(PainCh%, "Sensation");
+
+SampleWaveform(DS5VoltFB%, 2, DS5SampleRate%);
+SampleCalibrate(DS5VoltFB%, "Volts", 20, 0, 0);
+SampleTitle$(DS5VoltFB%, "DS5 Volt");
+
+SampleWaveform(TrigTest%, 3, DS5SampleRate%);
+SampleCalibrate(TrigTest%, "mA", Scale%, 0, 0);
+SampleTitle$(TrigTest%, "Trigger/Test");
+
+
+'Need to add scaling for both flux and temp each doppler unit. 5v = 1000, 500, 100 or 2.5v = 1000 PU;
+'Temp 5v = 50DegC or 2.5v = 50DegC
+Var DopCalFlux% := 100;
+Var DopCalTemp% := 10;
+'Doppler Flux 1 
+SampleWaveform(DopFluxCh1%, 4, 1000);
+SampleCalibrate(DopFluxCh1%, "PU", DopCalFlux%, 0);
+SampleTitle$(DopFluxCh1%, "LDF 1.1 Flux");
+
+'Doppler Temp 1
+SampleWaveform(DopTempCh1%, 5, 1000);
+SampleCalibrate(DopTempCh1%, "DegC", DopCalTemp%, 0);
+SampleTitle$(DopTempCh1%, "LDF 1.1 Temp");
+
+'Doppler Flux 2
+SampleWaveform(DopFluxCh2%, 6, 1000);
+SampleCalibrate(DopFluxCh2%, "PU", DopCalFlux%, 0);
+SampleTitle$(DopFluxCh2%, "LDF 1.2 Flux");
+
+'Doppler Temp 2
+SampleWaveform(DopTempCh2%, 7, 1000);
+SampleCalibrate(DopTempCh2%, "DegC", DopCalTemp%, 0);
+SampleTitle$(DopTempCh2%, "LDF 1.2 Temp");
+
+'Doppler Flux 3
+SampleWaveform(DopFluxCh3%, 8, 1000);
+SampleCalibrate(DopFluxCh3%, "PU", DopCalFlux%, 0);
+SampleTitle$(DopFluxCh3%, "LDF 2.1 Flux");
+
+'Doppler Temp 3
+SampleWaveform(DopTempCh3%, 9, 1000);
+SampleCalibrate(DopTempCh3%, "DegC", DopCalTemp%, 0);
+SampleTitle$(DopTempCh3%, "LDF 2.1 Temp");
+
+'Doppler Flux 4
+SampleWaveform(DopFluxCh4%, 10, 1000);
+SampleCalibrate(DopFluxCh4%, "PU", DopCalFlux%, 0);
+SampleTitle$(DopFluxCh4%, "LDF 2.2 Flux");
+
+'Doppler Temp 4
+SampleWaveform(DopTempCh4%, 11, 1000);
+SampleCalibrate(DopTempCh4%, "DegC", DopCalTemp%, 0);
+SampleTitle$(DopTempCh4%, "LDF 2.2 Temp");
+
+'Doppler Flux 5
+SampleWaveform(DopFluxCh5%, 12, 1000);
+SampleCalibrate(DopFluxCh5%, "PU", DopCalFlux%, 0);
+SampleTitle$(DopFluxCh5%, "LDF 3.1 Flux");
+
+'Doppler Temp 5
+SampleWaveform(DopTempCh5%, 13, 1000);
+SampleCalibrate(DopTempCh5%, "DegC", DopCalTemp%, 0);
+SampleTitle$(DopTempCh5%, "LDF 3.1 Temp");
+
+'Doppler Flux 6
+SampleWaveform(DopFluxCh6%, 14, 1000);
+SampleCalibrate(DopFluxCh6%, "PU", DopCalFlux%, 0);
+SampleTitle$(DopFluxCh6%, "LDF 3.2 Flux");
+
+'Doppler Temp 6
+SampleWaveform(DopTempCh6%, 15, 1000);
+SampleCalibrate(DopTempCh6%, "DegC", DopCalTemp%, 0);
+SampleTitle$(DopTempCh6%, "LDF 3.2 Temp");
+
+
+
+
+'PPG channels
+'Var i%;
+'For i% := DS5CurrentCh%+1 to DS5CurrentCh%+10 do
+'SampleWaveform(i%, i%-1, 1000);
+'SampleCalibrate(i%, "", 1, 0);  
+'SampleTitle$(i%, Print$("PPG %d", DS5CurrentCh%-i%));    
+'next    
+
+SampleDigMark(1);
+DigMk% := SampleChaninfo(-3);
+
+SampleOptimise(2, 1, 10);
+
+SequencerSetup%();
+Return 1
+end
+
+Func SequencerSetup%();   'Sets up the sequencer outputs for starting and stopping states
+'SampleSeqCtrl(1, SeqWaveCtrl%); ' Script only control of graphical sequencer.
+'SampleSequencer(2);   'Set graphical sequencer mode
+'PulseKey$(0, "0");
+'PulseSection(0, 0.005, 0, -1);           'Set section length, repeats and next
+'PulseOutEnable(0, 1+2);                  'Enable digital and DAC outputs (DAC 1 = 2 on)
+'PulseDAC("V", 5, 0, 0);                'DAC settings and Abs level flags
+'PulseClear(-1);
+'
+'PulseDataSet(0, 1, 0, 5.0);            'Set 5v on DAC 1 for slider 'power' 
+'PulseDataSet(0, 0, 0, 0.0);            'Set 0v on DAC 0 for playwave start and stop
+'Add change of section marker here. Can't find a WaveBR equivalent in the graphical seq commands.
+
+SampleSequencer(1);   'Set text sequencer mode
+Seq% := Filenew(2);
+View(Seq%);
+
+Print("SET    1,1,0\n");
+Print("\n");
+Print("VAR    V1,Code=1\n");
+Print("\n");
+Print("DAC    1,5\n");
+Print("\n");
+
+Print("'G  DELAY  s(%d)\n", BaselineLen%);
+Print("WAVEGO 1\n");
+Print("WAVEGO 1,W\n");
+Print("MARK   0\n");
+Print("BB:        WAVEBR BB,A            ;C, A, S         ;Branch until playwave area changes\n");
+Print("MARK   Code\n");
+Print("ADDI   Code,1\n");
+Print("WAVEBR BB, S\n");
+Print("'H Halt\n");
+
+FileSaveAs(View(app(3)).FileName$(-1)+"Test.pls", 2, 1);
+Var SName$ := FileName$(-5);
+SampleSequencer(FileName$(0));
+FileClose(0, -1);
+
+Return 1
+end
+
+Func SetOutput%(Area%);
+'Printlog("\nSetoutput%");
+ScaleShape%(OutType%[idx%], Out[idx%], Area%);
+
+Var Key$ := Print$("%d", Area%);
+
+'PlayWaveAdd(Key$, "", 0, 0, 1.0, Type%);
+
+If SampleStatus() = 2 then
+    PlaywavePoints(Key$, Outpoints%[idx%]);
+    PlayWaveCycles(Key$, OutCycles%[idx%]);
+endif
+
+Idx% += 1;
+
+If Idx% = Len(out[]) then
+    PlayWaveLink$(Key$, Chr$(0));
+    Finish% := 1;
+    'nWhile PlayWaveStatus$() <> "" do yield(0.01, 1023); wend
+endif
+            Yield();
+            
+Return 1
+end
+
+Func SetupPlaywaveAreas%();
+PlayWaveDelete(); 'Delete all existing areas
+
+var MemSz% := PlayWaveAdd("1", "First", 0, Rate%, Rate%);
+    MemSz% := PlayWaveAdd("2", "Second", 0, Rate%, Rate%);
+
+    PlayWaveLink$("1", "2");    
+    PlayWaveLink$("2", "1");
+
+'    MemSz% := PlayWaveAdd("B", "Baseline", 0, 1.0, 1.0); 'Baseline area 
+'    PlayWaveCycles("B", BandRTimes%[1]);  'Baseline length
+'    PlayWaveLink$("B", "1");
+    MemSz% := PlayWaveAdd("R", "Recovery", 0, 1.0, 1.0); 'Recovery area IF finishing early
+    PlayWaveCycles("R", BandRTimes%[3]);  'Recovery length
+
+PlayWaveCtrl(1, SeqWaveCtrl%);
+
+Return 1
+end
+
+
+Func CreateShapes%(); 'Creates a libary of shapes of 1v amp
+
+Var Err%;
+
+Library% := Filenew(7, 0, 1, 1, 32);
+
+If Library% < 0 then
+    Message("Failed to create Waveform output file. Halting");
+    Halt;
+endif
+
+WindowTitle$("Library");
+
+Var Length := PWth[1]/1000;
+
+'Var Length := 0.0018;
+
+Var PrePad := 0.0005, PostPad := 0.0005; 
+Xrange(0, PrePad+Length+PostPad);
+
+'Silent
+Silent% := Memchan(1, 0, 1.0);
+ChanTitle$(Silent%, "Silent"); 
+Var Empty%[Rate%];
+MemSetItem(Silent%, 0, 0, Empty%[]); 
+Chanshow(Silent%);
+
+'Ramp
+RampMem% := MemChan(1, 0, BinSz);
+ChanTitle$(RampMem%, "Ramp"); 
+Chanshow(RampMem%);
+
+Var Virt% := VirtualChan(0, Print$("WPoly(0, %f, 0,0,0)", Length+PrePad+PostPad), 0, BinSz, 0);
+
+Chanshow(Virt%);
+Err% := MemImport(RampMem%, Virt%, 0, Length+PrePad+PostPad);
+
+VirtualChan(Virt%, Print$("WTri(%f, %f, %f)", Length/4.0, Length/4.0, PrePad), 0, BinSz, 0);
+Err% := MemImport(RampMem%, Virt%, PrePad, PrePad+Length/2.0);
+
+VirtualChan(Virt%, Print$("WTri(%f, %f, %f)*-1", Length/4.0, Length/4.0, PrePad), 0, BinSz, 0);
+Err% := MemImport(RampMem%, Virt%, PrePad+(Length/2.0), PrePad+Length);
+
+'Squarewave
+SquareMem% := MemChan(1, 0, Binsize(Virt%));
+ChanTitle$(SquareMem%, "Square"); 
+Chanshow(SquareMem%);
+
+VirtualChan(Virt%, Print$("WPoly(0, %f, 0,0,0)", Length+PrePad+PostPad), 0, BinSz, 0);
+Err% := MemImport(SquareMem%, Virt%, 0, Length+PrePad+PostPad);
+
+'VirtualChan(Virt%, Print$("(WSqu(%f, %f, %f)*-2)+1", Length/2.0, Length/2.0, PrePad), 0, BinSz, 0);
+'Err% := MemImport(SquareMem%, Virt%, PrePad, Prepad+Length);
+VirtualChan(Virt%, Print$("((WSqu(%f, %f, %f))*-1)+1", Length/2.0, Length/2.0, PrePad), 0, BinSz, 0);
+Err% := MemImport(SquareMem%, Virt%, Prepad, Prepad+(Length/2.0));
+
+VirtualChan(Virt%, Print$("(WSqu(%f, %f, %f))*-1", Length/2.0, Length/2.0, PrePad), 0, BinSz, 0);
+Err% := MemImport(SquareMem%, Virt%, Prepad+(Length/2.0), Prepad+Length);
+
+
+'Sinewave
+SineMem% := MemChan(1, 0, Binsize(Virt%));
+ChanTitle$(SineMem%, "Sine");
+Chanshow(SineMem%);
+
+VirtualChan(Virt%, Print$("WPoly(0, %f, 0,0,0)", Length+PrePad+PostPad), 0, BinSz, 0);
+   Err% := MemImport(SineMem%, Virt%, 0, Length+PrePad+PostPad);
+
+VirtualChan(Virt%, Print$("WSin(%d, %f)", 1.0/Length, PrePad), 0, BinSz, 0);
+Err% := MemImport(SineMem%, Virt%, PrePad, Prepad+Length);
+
+ChanDelete(Virt%);
+
+Return 1
+end
+
+
+Func ScaleShape%(Type%, Scale, Slot%);
+'PrintLog("\nScaleShape%");
+Var err%;
+Var TypeChan%, Name$, Key$ := Print$("%d", Slot%);
+
+View(Library%);
+
+docase
+Case Type%  = 0 then
+    TypeChan% := Silent%;
+    Name$ := "Silent";
+    case Type% = 1 then
+    TypeChan% := RampMem%;
+    Name$ := "Ramp";
+case Type% = 2 then
+    TypeChan% := SquareMem%;
+    Name$ := "Square";
+case Type% = 3 then
+    TypeChan% := SineMem%;
+    Name$ := "Sine";
+endcase    
+
+
+
+Var Virt% := VirtualChan(0, Print$("Ch(%d)*%f", TypeChan%, Scale), 0, BinSz, 0);
+
+If TypeChan% = Silent% then
+    VirtualChan(Virt%, Print$("WPoly(0, %f, 0,0,0)", OutWaveTLen), 0, BinSz, 0);
+else
+    VirtualChan(Virt%, Print$("Ch(%d)*%f", TypeChan%, Scale), 0, BinSz, 0);
+endif
+Chanshow(Virt%);
+
+Yield();
+Var Temp[Rate%];
+
+'If OutType%[idx%] <> 0 then
+'    resize Temp[1000];
+'endif
+
+Chandata(Virt%, Temp[], 0, 1.0); 
+
+'If Idx% = 2 then debug(); endif
+
+Var GetErr% := PlayWavePoints(Key$);
+Var SetErr% := PlayWavePoints(Key$, Rate%);
+
+Err% := PlaywaveCopy(Key$, Temp[], 0, 0);    'Set the data
+'Err% := PlaywaveCopy(Key$, Temp[], 0, 1);    'Read the data
+
+ SetErr% := PlayWavePoints(Key$, OutPoints%[Idx%]);
+ GetErr% := PlayWavePoints(Key$);
+'Err% := PlayWaveAdd(Key$, Print$("%s %f", Left$(Name$, 1), Scale), DAC%, Rate%, Temp[]);
+
+'If key$ = "1" then
+'    PlayWaveLink$("1", "2");
+'else    
+'    PlayWaveLink$("2", "1");
+'endif
+    
+If key$ = "1" then
+    
+    Nextout$ := "2"
+else
+    Nextout$ := "1"
+endif
+
+
+ChanDelete(Virt%);
+Yield();
+
+Return 1
+end
+
+
+
+Func StimProfDlg%();
+Var ok%;
+Var Profile$, Settings$[14];
+Var Mode%;
+
+'Set the variables above for initial values
+Var i%;
+
+For i% := 1 to 10 do
+    
+    GetSettings%(i%);   
+    
+    DlgCreate("Programme Stimulation Profiles");  'Start new dialog
+    DlgAllow(1023, 0, StimProfChng%);
+    DlgInteger(1,"Number of pre-set stimulation profiles:",1,10,0,0,1);
+    'DlgLabel(2,"Programme Profile 1");
+    DlgGroup(Print$("Programme Profile %d", i%), 1, 2, 120, 6);
+    
+    DlgLabel(2,"Electrode type:", 0, 3);         'EType%
+    DlgList(3,10,ElecType$[], 10, 26, 3);
+    DlgLabel(4,"Pulse wavefrom:", 40, 3);   'WType%      f
+    DlgList(5, 10, WaveType$[1:3], 10, 63, 3);     'Show only the available waveforms
+    DlgLabel(6,"Pulse Frequency (Hz):", 80, 3);   'Freq% Fr[]
+    DlgReal(7,"",PFreqRng[0], PFreqRng[1], 100, 3);               '80 - 200Hz
+    
+    DlgLabel(8,"Pulse width (ms):", 0, 4);
+    DlgReal(9,"", PWidthRng[0], PWidthRng[1], 26, 4);
+    DlgLabel(10,"Intensity increment (mA):", 40, 4);
+    DlgReal(11,"", IntIncRng[0] , IntIncRng[1], 63, 4);    
+    DlgLabel(12,"Intensity interval (S):", 80, 4);
+    DlgInteger(13,"", IntIntRng[0] , IntIntRng[1], 100, 4);
+    
+    
+    DlgLabel(14,"Train frequency (Hz):", 0, 5);
+    DlgReal(15,"", TrainFreqRng[0], TrainFreqRng[1], 26, 5); '||Tooltip
+    DlgLabel(16,"Train width (S):", 40, 5);
+    DlgInteger(17,"", TrainWidthRng[0], TrainWidthRng[1], 63, 5);
+    DlgLabel(18,"Stim duration (S):", 80, 5);    'MaxDuration MDur[]
+    DlgInteger(19,"", MaxDurRng[0], MaxDurRng[1], 100, 5);
+    
+    DlgLabel(20,"Output curent range (mA):", 0, 6);  'DS5CurRange%
+    DlgList(21, 10,StimCurR$[], 10, 26, 6);
+    DlgLabel(22,"Baseline (S):", 40, 6);       'BaselineLen% BandRTimes%[1];
+    DlgInteger(23,"", BaselineRng[0], BaselineRng[1], 63, 6);
+    DlgLabel(24,"Recovery (S):", 80, 6);    'RecoveryLen% BandRTimes%[3];
+    DlgInteger(25,"",RecoveryRng[0], RecoveryRng[1], 100, 6);
+    
+    
+    DlgLabel(26, "Output starting level (mA):", 0, 7);
+    DlgReal(27,"",0.1, 100, 26, 7);
+    
+    DlgLabel(28, "Output end level (mA):", 40, 7);
+    DlgReal(29,"",0.0, 100, 63, 7);
+    
+    DlgText("Mode:", 80, 7);
+    'DlgList(ModeSelect%, 18, "Continuous|Continuous stepped|Gap|Gap stepped", 4, 100, 7);
+    DlgList(ModeSelect%, 18, ModeType$[], 4, 100, 7);
+    
+    Msg% := DlgText("", 0, 8, 120);
+    Error% := DlgText("", 0, 9, 90);
+    
+    
+    
+    DlgButton(0,"Cancel",0, -100, 10);
+    DlgButton(1,"Confirm",0, 100, 10);
+    
+    DlgImage(Jpeg$, 1, 11, 119, 10);
+'        ok% := DlgShow(NumProf%, EType%[], WType%[], Fr[], Pwth[], IntInc[], IntInt[], 
+'    TrFr[], TrWdth[], Mdur[], CurRng%[], BandRTimes%[], CStLev[], CEndLev[]);     'ok% is 0 if user cancels,  variables updated if not
+    ok% := DlgShow(NumProf%, EType%[], WType%[], Fr[], Pwth[], IntInc[], IntInt[], 
+    TrFr[], TrWdth[], Mdur[], CurRng%[], BandRTimes%[], CStLev[], CEndLev[], ModeType%[]);     'ok% is 0 if user cancels,  variables updated if not
+    
+    If ok% = 1 then
+          
+        LoadSaveToRegistry$(i%, 1, Print$("%d,%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%.2f, %.2f, %.2f, %d", NumProf%, Etype%[1],WType%[1],Fr[1], PWth[1],IntInc[1],IntInt[1],TrFr[1],TrWdth[1],Mdur[1],CurRng%[1],BandRTimes%[1],BandRTimes%[3], CStLev[1], CEndLev[1], ModeType%[0]));
+
+        ToolbarEnable(3, 1); 'Enable New study
+        If i% = NumProf% then break endif
+    else
+        Break  
+    endif
+    
+next;
+
+Return 1
+end
+
+Func StimProfChng%(Item%);
+Var TDur$ := "Train duration", TInt$ := "Train Interval", TsPInt$ := "Trains/intensity", IntChng$ := "Intensity levels", TotalTDur$ := "Total duration";
+Var mode%:= -1;
+
+ErrorFlag% := 0;
+
+Mode% := TestForMode%(Mode%);
+
+'Printlog("Mode %d\n", Mode%);
+
+'If mode% = -1 then debug() endif
+Var TotalDur;
+
+Var Mode$ := ", Mode : ";
+DoCase
+Case mode% = -1 then Mode$ += "Unknown";   
+    
+Case mode% =  0 then Mode$ += "Continuous";
+    TDur$ += Print$(" %d s, ", DlgValue(19)); 'Train duration
+    TInt$ += Print$(" 0, "); 'Train Interval
+    TsPInt$ += Print$(" 1, "); 'Trains/intensity
+    IntChng$ += Print$(" 1, "); 'Intensity levels
+    TotalTDur$ += Print$(" %ds", DlgValue(19)+DlgValue(23)+DlgValue(25));
+    TotalDur := DlgValue(19);
+    
+    
+Case mode% =  1 then Mode$ += "Continuous stepped";
+    TDur$ += Print$(" %d s, ", DlgValue(19)); 'Train duration
+    TInt$ += Print$(" %d, ", DlgValue(13)); 'Train Interval
+    TsPInt$ += Print$(" 1, "); 'Trains/intensity
+    If DlgValue(13) > 0 then  '''''''''''''''''''''''''''''''''''''''''' for checking
+        IntChng$ += Print$(" %d, ", DlgValue(19) / DlgValue(13)); 'Intensity levels
+    Else 
+        IntChng$ += Print$(" 1");
+    endif    
+    TotalTDur$ += Print$(" %ds", DlgValue(19)+DlgValue(23)+DlgValue(25));
+    TotalDur := DlgValue(19);
+    
+Case mode% =  2 then Mode$ += "Gap";
+    TDur$ += Print$(" %d s, ", DlgValue(19)); 'Train duration
+    TInt$ += Print$(" 0, "); 'Train Interval
+    TsPInt$ += Print$(" %d, ", DlgValue(19) / (1.0/DlgValue(15))); 'Trains/intensity
+    IntChng$ += Print$(" 1, "); 'Intensity levels
+    TotalTDur$ += Print$(" %ds", DlgValue(19)+DlgValue(23)+DlgValue(25));
+    TotalDur := DlgValue(19);
+    
+Case mode% =  3 then Mode$ += "Gap Stepped";
+    TDur$ += Print$(" %d s, ", DlgValue(19)); 'Train duration
+    TInt$ += Print$(" %d, ", DlgValue(13)); 'Train Interval
+    TsPInt$ += Print$(" %d, ", DlgValue(13) / (1.0 / DlgValue(15))); 'Trains/intensity
+    If DlgValue(13) > 0 then  '''''''''''''''''''''''''''''''''''''''''' for checking
+        IntChng$ += Print$(" %d, ", DlgValue(19) / DlgValue(13));  'Intensity levels
+        Else 
+        IntChng$ += Print$(" 1 ");
+    endif     
+    TotalTDur$ += Print$(" %ds", DlgValue(19)+DlgValue(23)+DlgValue(25));
+    
+    TotalDur := DlgValue(19);
+    
+endcase   
+
+ErrorFlag% := ErrorCheck%(Mode%); 'Check for errors'
+
+DlgValue$(Msg%, TDur$+TInt$+TsPInt$+IntChng$+TotalTDur$+Mode$);
+
+If ErrorFlag% = 1 then
+    DlgEnable(0, -1);
+else
+    DlgEnable(1, -1); 
+    DlgValue$(Error%, "");    
+endif
+
+Return 1;
+end
+
+
+Func ErrorCheck%(Mode%);
+ErrorFlag% := 0;
+
+If mode% > -1 then 'for all modes, check for correct intensity start level 
+     If DlgValue(27) > StimCurR%[DlgValue(21)] then
+        ErrorFlag% := 1;
+        DlgValue$(Error%, Print$("Warning: Output starting level %.2f mA highter than Output current range %d mA.", DlgValue(27), StimCurR%[DlgValue(21)])); 
+    endif
+    
+Endif
+
+If Mode% = 1 or mode% = 3 then
+        If DlgValue(13) > DlgValue(19) then
+        ErrorFlag% := 1;
+        DlgValue$(Error%, Print$("Warning: Intensity interval %d s longer than Stim duration %d.", DlgValue(13), DlgValue(19))); 
+        endif
+    
+        If 1.0/DlgValue(15) > DlgValue(13) then
+        ErrorFlag% := 1;
+        DlgValue$(Error%, Print$("Warning: Train frequency %.2f (%d s) longer than Intensity interval %d.", DlgValue(15),1.0/DlgValue(15), DlgValue(13))); 
+    endif
+    
+    If DlgValue(13) > 0 then
+    If ((DlgValue(19)/DLgValue(13))*DlgValue(11))+DlgValue(27) > StimCurR%[DLgValue(21)] then;
+         ErrorFlag% := 1;
+        DlgValue$(Error%, Print$("Warning: Intensity increment will exceed output range before Stim duration end.")); 
+        endif 
+    endif    
+endif
+
+If Mode% = 2 or mode% = 3 then 'If Gap or Gap stepped
+    If 1.0 / DlgValue(15) <= DlgValue(17) then
+        ErrorFlag% := 1;
+        DlgValue$(Error%, Print$("Warning: Train width %d s longer than or equal to Train frequency %.2f (%.2f s).", DlgValue(17), DlgValue(15), 1.0/DLgValue(15))); 
+    endif
+    
+
+    
+endif
+
+If Mode% = 3 then
+    
+    If Frac(DlgValue(13) / (1.0 / DlgValue(15))) > 0 then
+        ErrorFlag% := 1;
+        DlgValue$(Error%, Print$("Warning: Train frequency %.2f (%.2f s) does not divide equally into Intensity interval %d.", DlgValue(15), 1.0/DlgValue(15), DlgValue(13))); 
+    endif
+    
+    
+    
+endif
+
+Return ErrorFlag%;
+end
+
+
+Func TestForMode%(Mode%);
+
+var Items%[15] := {9,10,11,12,13,15,17,19,21,23,25,27,29};
+DlgEnable(1, Items%[]);
+DlgEnable(0, 29);
+'mode% = -1 = "Unknown";   
+'mode% =  0 = "Continuous"; Intensity interval = 0, Intensity Increment = 0. Therefore only Pulse frequencty and stim duration matter
+'mode% =  1 = "Continuous stepped"; 
+'mode% =  2 = "Gap";
+'mode% =  3 = "Gap Stepped";  
+
+docase
+    
+    Case DlgValue(ModeSelect%) = 0 then 'Continuous
+        DlgEnable(0, 11); 'Disable intensity increment
+        DlgEnable(0, 13); 'Disable intensity interval
+        DlgEnable(0, 15); 'Disable Train frequency
+        DlgEnable(0, 17); 'Disable Train width
+        Mode% := 0; return mode%;
+        
+    Case DlgValue(ModeSelect%) = 1 then 'Continuous stepped
+         DlgEnable(0, 15); 'Disable Train frequency
+         DlgEnable(0, 17); 'Disable Train width
+        Mode% := 1; return mode%;
+        
+Case DlgValue(ModeSelect%) = 2 then 'Gap
+        DlgEnable(0, 11); 'Disable intensity increment
+        DlgEnable(0, 13); 'Diasble intensity interval
+    
+        Mode% := 2; return mode%;
+        
+Case DlgValue(ModeSelect%) = 3 then 'Gap Stepped
+        'DlgEnable(0,19);
+        Mode% := 3; return mode%; 
+   
+endcase    
+    
+
+Return Mode%;
+end
+
+Func CheckButtonValidity%();
+
+If Dlgvalue(13) = 0 then  'Intensity interval or train frequency    
+    'DlgValue(11, 0);    'Intensity increment
+    'DlgEnable(0, 11);   'Intensity increment
+    DlgValue(13, 0);      'Intensity interval
+    DlgEnable(0, 13);
+    'DlgValue(15, 0);      'Train frequency
+    'DlgEnable(0, 15);
+    DlgValue(17, 0);      'Train width
+    DlgEnable(0, 17);
+    'Dlgvalue(29, 0);      'Output end level
+    'DlgEnable(0, 29);
+endif    
+    
+
+  
+
+
+Return 1
+end
+
+Func LoadSaveToRegistry$(PrNum%, LoadSave%, Values$);
+Var Read$;
+
+If LoadSave% = 1 then  'If saving
+
+'Set profile
+Profile("GSTT Profiles", Print$("Profile %d", PrNum%), Values$);
+    
+else    
+'Read profile
+Profile("GSTT Profiles", Print$("Profile %d", prNum%), Values$, Read$);
+Endif
+
+Return Read$
+end
+
+Func GetSettings%(i%);
+Var Profile$, Settings$[16], Rtn%;
+
+    Profile$ := LoadSaveToRegistry$(i%, 0, "");    'Load from profile
+    ReadSetup(",",",",",",",",",");    
+    ReadStr(Profile$, Settings$[]);
+    
+    
+    If Profile$ > "" then    
+        '     NumProf%, Etype%[1],WType%[1],Fr[1], PWth[1],IntInc[1],IntInt[1],TrFr[1],TrWdth[1],Mdur[1],CurRng%[1],BandRTimes%[1],BandRTimes%[3]
+       'Decode(); 
+        'NumProf%        := Val(Settings$[0]);
+        Etype%[1]       := Val(Settings$[1]);  
+        WType%[1]       := Val(Settings$[2]);  
+        Fr[1]           := Val(Settings$[3]); 
+        PWth[1]         := Val(Settings$[4]);  
+        IntInc[1]       := Val(Settings$[5]);  
+        IntInt[1]       := Val(Settings$[6]);
+        TrFr[1]         := Val(Settings$[7]);
+        TrWdth[1]       := Val(Settings$[8]);
+        Mdur[1]         := Val(Settings$[9]);
+        CurRng%[1]      := Val(Settings$[10]);
+        BandRTimes%[1]  := Val(Settings$[11]);
+        BandRTimes%[3]  := Val(Settings$[12]);
+        CStLev[1]       := Val(Settings$[13]);
+        CEndLev[1]      := Val(Settings$[14]);
+        ModeType%[0]    := Val(Settings$[15]);
+    
+ElecType% := EType%[1];
+WaveType% := WType%[1];
+Freq := Fr[1];
+PWidth := Pwth[1];
+IntensityInc := IntInc[1];
+    CurStartLev := CStLev[1];
+    CurEndLev := CEndLev[1];
+TrainFreq := TrFr[1];
+    SecLen% := TrWdth[1];
+MaxStimDur := MDur[1];    
+BaselineLen% := BandRTimes%[1];
+RecoveryLen% := BandRTimes%[3];
+
+DS5CurRange% := StimCurR%[CurRng%[1]];
+'DS5CurRange% := GetCurrentRange%();    
+    
+    Rtn% := 1;
+    
+    
+    
+else
+    Rtn% := 0;
+    endif 
+
+
+
+
+Return Rtn%
+end
+
+Func VisitDlg%();
+Var ok%, Dummy%, Dummy1%, I%, j%, k%, L%;
+Var Profiles$[8];
+For i% := 0 to Len(Profiles$[])-1 do
+    Profiles$[i%] := Print$("Profile %d", i%+1);
+Next    
+
+
+
+'Set the variables above for initial values
+DlgCreate("Visit details", 0, 0, 114, 0);  'Start new dialog
+DlgAllow(1023, 0, ChangeVisit%);
+DlgString(1, "Participant ID:",10, "a-zA-Z0-9", 100, 1);
+DlgInteger(2,"Number of pre-set stimulation profiles:",1,8,100,0,1);
+DlgLabel(3,"Stimulation Profile Order");
+
+j% := 5; k% := 4; L% := 4;
+For I% := 1 to 8 do
+
+DlgGroup("", 1, L%, 112, 4);
+'
+DlgLabel(k%, Print$("Profile %d:", i%), 0, j%);
+    Group%[i%] := k%+1;
+    DlgList(k%+1,10, Profiles$[], 10, 26, j%);
+
+DlgLabel(k%+2,"Pulse Frequency (Hz):", 0, j%+1);
+DlgReal(k%+3,"",PFreqRng[0], PFreqRng[1], 26, j%+1);               '8- 200Hz
+'DlgList(k%+3, 10, "Item 1|Item 2|Item 3", 10, 26, j%+1);
+DlgLabel(k%+4,"Waveform:", 40, j%+1);
+DlgList(k%+5, 10, WaveType$[], 10, 63, j%+1);
+DlgLabel(k%+6,"Electrode type:", 80, j%+1);
+DlgList(k%+7, 10,ElecType$[], 10, 100, j%+1);
+
+DlgLabel(k%+8,"Intensity increment (mA):", 0, j%+2);
+DlgReal(k%+9,"", IntIncRng[0], IntIncRng[1], 26, j%+2);
+DlgLabel(k%+10,"Train Frequency(Hz):", 40, j%+2);
+DlgReal(k%+11,"", TrainFreqRng[0], TrainFreqRng[1], 63, j%+2);
+DlgLabel(k%+12,"Max duration (S):", 80, j%+2);
+DlgInteger(k%+13,"", MaxDurRng[0], MaxDurRng[1], 100, j%+2);
+    J%+=4;
+    k%+=14;
+    L%+=4;
+    
+   
+Next    
+
+DlgButton(0,"Cancel",0, -90, J%);
+
+'DlgButton(1, "OK");
+DlgButton(1,"Confirm",0, 90, j%);
+'DlgVisible(0, -1);
+ok% := DlgShow(PID$, NumStimProf%, Dummy%, Dummy%, VisitGrp1[], Dummy%, VisitGrp2[],Dummy%, VisitGrp3[],Dummy%, VisitGrp4[],Dummy%, VisitGrp5[],Dummy%, VisitGrp6[],Dummy%, VisitGrp7[],Dummy%, VisitGrp8[]);    'ok% is 0 if user cancels,  variables updated if not
+
+If ok% = 0 then return 1 endif
+
+ToolbarEnable(5, 1);
+'Resize OutOrder%[NumStimProf%];
+'For i% := 1 to NumStimProf% do
+OutOrder%[0] := VisitGrp1[0]+1;
+OutOrder%[1] := VisitGrp2[0]+1;
+OutOrder%[2] := VisitGrp3[0]+1;
+OutOrder%[3] := VisitGrp4[0]+1;
+OutOrder%[4] := VisitGrp5[0]+1;
+OutOrder%[5] := VisitGrp6[0]+1;
+OutOrder%[6] := VisitGrp7[0]+1;
+OutOrder%[7] := VisitGrp8[0]+1;
+'Next    
+    
+
+Return 1
+end
+
+
+
+Func ChangeVisit%(item%);
+Var p%, m%;
+    
+
+     If DlgValue$(1) = "" then
+    
+    DlgEnable(0, Group%[0:9]);
+    DlgEnable(0, 2);
+    
+    For p% := 0 to 8 do
+        
+        for m% := Group%[p%]+2 to Group%[p%]+12 step 2 do   'Diable access to fields except first in each group
+            DlgEnable(0, m%);
+        next
+        
+    next
+    
+    
+    DlgEnable(0, -1);
+    DlgEnable(1, -0);
+    'Message("Participant I.D. must be entered");
+    Return 1
+else
+    DlgEnable(1, 2);  'Enable number of trials
+    DlgEnable(1, 5);
+    DlgEnable(1, -1);
+    Reload%(5);
+endif
+   
+
+If Item% = 2 or item% = 0 then
+    Var Ct% := DlgValue(2);
+    DlgEnable(0, Group%[1:8]);
+    DlgEnable(1, Group%[1:ct%]); 
+    'ChangeVisit%(5);    
+endif
+
+If item% = 0 then
+    For p% := 1 to 8 do
+        
+        for m% := Group%[p%]+2 to Group%[p%]+12 step 2 do   'Diable access to fields except first in each group
+            DlgEnable(0, m%);
+        next
+        
+    next
+    ChangeVisit%(5);
+endif    
+        
+    If Item% >= Group%[1] then
+      Var Get%, got%, Grp%;  
+        docase
+        Case Item% = Group%[1] then Grp% := 1;
+             
+        Case Item% = Group%[2] then Grp% := 2;  
+        Case Item% = Group%[3] then Grp% := 3;  
+        Case Item% = Group%[4] then Grp% := 4;  
+        Case Item% = Group%[5] then Grp% := 5;  
+        Case Item% = Group%[6] then Grp% := 6;  
+        Case Item% = Group%[7] then Grp% := 7;  
+        Case Item% = Group%[8] then Grp% := 8;              
+        endcase
+        
+        Get% := DlgValue(Item%)+1;
+        GoT% := GetSettings%(Get%);
+    'LoadSaveToRegistry$(Get%, 0, "");     'Get the profile information from the registry
+    
+    If Got% = 1 then
+        DlgValue(Group%[Grp%]+2, Fr[1]);
+        DlgValue(Group%[Grp%]+4, WType%[1]+1);
+        DlgValue(Group%[Grp%]+6, EType%[1]);    
+
+    DlgValue(Group%[Grp%]+8, IntInc[1]);
+    DlgValue(Group%[Grp%]+10, TrFr[1]);
+        DlgValue(Group%[Grp%]+12, MDur[1]);
+    else
+        Message(Print$("Profile # %d not found", Get%));
+        DlgValue(Item%, 0);
+        ChangeVisit%(item%);
+    endif
+  endif  
+    
+   Reload%(item%); 
+
+Return 1
+end
+
+
+Func Reload%(item%);
+If Item% >= Group%[1] then
+      Var Get%, got%, Grp%;  
+        docase
+        Case Item% = Group%[1] then Grp% := 1;
+             
+        Case Item% = Group%[2] then Grp% := 2;  
+        Case Item% = Group%[3] then Grp% := 3;  
+        Case Item% = Group%[4] then Grp% := 4;  
+        Case Item% = Group%[5] then Grp% := 5;  
+        Case Item% = Group%[6] then Grp% := 6;  
+        Case Item% = Group%[7] then Grp% := 7;  
+        Case Item% = Group%[8] then Grp% := 8;              
+        endcase
+        
+        Get% := DlgValue(Item%)+1;
+        GoT% := GetSettings%(Get%);
+    'LoadSaveToRegistry$(Get%, 0, "");     'Get the profile information from the registry
+    
+    If Got% = 1 then
+        DlgValue(Group%[Grp%]+2, Fr[1]);
+        DlgValue(Group%[Grp%]+4, WType%[1]+1);
+        DlgValue(Group%[Grp%]+6, EType%[1]);    
+
+    DlgValue(Group%[Grp%]+8, IntInc[1]);
+    DlgValue(Group%[Grp%]+10, TrFr[1]);
+        DlgValue(Group%[Grp%]+12, MDur[1]);
+    else
+        Message(Print$("Profile # %d not found", Get%));
+        DlgValue(Item%, 0);
+        ChangeVisit%(item%);
+    endif
+endif 
+return 1
+end
+
+Func ConstFileName$(); 'Generates the file name to save
+
+'YYMMDD$-
+'ParticipantID-
+'ElectrodeType-
+'Wavefrom-
+'PulseFreq-
+'IntensityInc
+'Train Frequency-
+'Train width-
+'Maxduration-
+
+
+
+If PID$ <> LastPID$ then
+    
+Fname$ := "";
+Var YYMMDD$ := Date$(2, 2, 1, 3, "");
+
+
+ While InStr(YYMMDD$,"/", 0) <> 0 do
+        YYMMDD$ := DelStr$(YYMMDD$, InStr(YYMMDD$,"/", 0), 1);       
+wend
+
+Var TrFr$ := Print$("%.2f", TrFr[1]);
+
+While InStr(TrFr$,",", 0) <> 0 do 
+        TrFr$ := Replace$(TrFr$, ".", "_");       
+wend
+
+
+Fname$ := YYMMDD$+"-"+Print$("%S", PID$)+"-"+Print$("%s",ElecType$[EType%[1]])+"-"+Print$("%s", Wavetype$[WType%[1]+1]);
+Fname$ += "-"+Print$("%d", Fr[1])+"-"+Print$("%d", IntInc[1])+"-"+Print$("%s", TrFr$)+"-"+Print$("%d", TrWdth[1])+"-"+Print$("%d", Mdur[1]);
+Fname$ += "-000";
+SampleAutoName$(Fname$); 'File name template    '40 Chars max
+'SampleAutoFile(1); 'Save file at end of sampling
+    'FilePathSet(View(app(3)).FileName$(-1), 3); 'Set the path for file saving
+    
+    LastPID$ := PID$;
+endif
+SampleLimitTime(TotalTime); 'Set a time to allow automatic file naming
+
+'YYMMDD$-
+'ParticipantID-
+'ElectrodeType-
+'Wavefrom-
+'PulseFreq-
+'IntensityInc
+'Train Frequency-
+'Train width-
+'Maxduration-
+'Zeros -'000'
+
+
+Return Fname$;
+end
+
+Func Tidy%(State%);
+
+If viewkind(Library%) = 0 then
+    View(Library%);
+    Fileclose(0, -1);
+endif    
+
+If ViewKind(Info%) = 19 then
+     View(Info%);
+        Fileclose(0, -1);
+endif 
+
+ToolbarEnable(2, 1);
+ToolbarEnable(3, 1);
+
+Return State%
+end
+
+
+
+
+Func CreatePresentationOrder%(IntensityInc); 'Sets the order or pulse outputs
+
+'Reset the arrays
+Resize Out[0]; 'Main list outputs - amplitude
+Resize OutPoints%[0];
+Resize OutCycles%[0];
+Resize OutType%[0];
+Resize OutGaps%[0];
+
+DS5CurRange% := StimCurR%[CurRng%[1]];
+'Var StCurRng% := 1;
+Var Level := CurStartLev;
+Var IntensityInterval% := IntInt[1]; 
+Var NumBlocks%;      'Number of blocks with pulses with same params
+Var NumSteps%, i%;
+
+
+Level := CurStartLev;
+
+docase
+    case ModeType%[0] = 0 then 'Continuous
+        NumBlocks% := 1;
+        
+        Resize Out[3]; 'We only need baseline, continuous and recovery times
+        Resize OutPoints%[Len(Out)];
+        Resize OutCycles%[Len(Out)];
+        Resize OutType%[Len(Out)];
+        
+        Out[0] := 0; 'Baseline
+        Out[1] := level/(DS5CurRange%/u1401Range%); 'Output amplitude;
+        Out[2] := 0; 'Recovery   
+        
+        OutPoints%[0] := Rate%; 'Baseline
+        OutPoints%[1] := Rate%*(1.0/Freq); 'points for one pulse
+        OutPoints%[2] := Rate%; 'Recovery time
+        
+        OutCycles%[0] := BaselineLen%; 'Baseline
+        OutCycles%[1] := Freq*MDur[1]; 'number pulse repeats
+        OutCycles%[2] := RecoveryLen%; 'Recovery time
+        
+        OutType%[0] := 0; 'Baseline
+        OutType%[1] := WaveType%+1; 'pulses
+        OutType%[2] := 0; 'Recovery time
+        
+        TotalTime := BaselineLen%+MDur[1]+RecoveryLen%+1;
+    
+    
+'*****************************************************************     
+    case ModeType%[0] = 1 then 'Continuous stepped
+        NumSteps% := Mdur[1] / IntInt[1];
+        Resize Out[NumSteps%+2]; 'We need baseline, number of step changes and recovery
+        Resize OutPoints%[Len(Out)];
+        Resize OutCycles%[Len(Out)];
+        Resize OutType%[Len(Out)];
+        
+        Out[0] := 0; 'Baseline
+        Out[1] := level/(DS5CurRange%/u1401Range%);
+    
+        For i% := 2 to Len(out)-2 do
+            Out[i%] := Out[i%-1]+Out[1];  
+        Next
+    
+        Out[Len(Out)-1] := 0; 'Recovery
+        
+        OutPoints%[0] := Rate%; 'Baseline
+        ArrConst(OutPoints%[1:NumSteps%], Rate%*(1.0/Freq)); 'points for one pulse
+        OutPoints%[Len(Out)-1] := Rate%; 'Recovery time
+        
+        OutCycles%[0] := BaselineLen%; 'Baseline
+        ArrConst(OutCycles%[1:NumSteps%], Freq*IntInt[1]); 'number pulse repeats
+        OutCycles%[Len(Out)-1] := RecoveryLen%; 'Recovery time
+        
+        OutType%[0] := 0; 'Baseline
+        ArrConst(OutType%[1:NumSteps%], WaveType%+1); 'pulses
+        OutType%[Len(Out)-1] := 0; 'Recovery time
+    
+        TotalTime := BaselineLen%+MDur[1]+RecoveryLen%+1;
+    
+    
+'***************************************************************** 
+        case ModeType%[0] = 2 then 'Gap same amplitude
+                NumBlocks% := MDur[1] / (1.0/TrFr[1]); 'Total stim time / TRain frequency
+                'NumSteps% := Mdur[1] / IntInt[1];
+    
+        Resize Out[(NumBlocks%*2)+2]; 'We need baseline, pulses, gap and recovery times
+        Resize OutPoints%[Len(Out)];
+        Resize OutCycles%[Len(Out)];
+        Resize OutType%[Len(Out)];
+        
+        Out[0] := 0; 'Baseline
+        Out[1] := level/(DS5CurRange%/u1401Range%); 'Output amplitude;
+    
+        For i% := 1 to NumBlocks%*2 step 2 do
+            Out[i%] := Out[1];
+        next
+    
+        Out[Len(Out)-1] := 0; 'Recovery   
+        
+        OutPoints%[0] := Rate%; 'Baseline
+        For i% := 1 to NumBlocks%*2 step 2 do    
+        OutPoints%[i%] := Rate%*(1.0/Freq); 'points for one pulse
+        OutPoints%[i%+1] := 1; 'points for one pulse 'Problems with resolution
+        Next
+        OutPoints%[Len(Out)-1] := Rate%; 'Recovery time
+        
+        OutCycles%[0] := BaselineLen%; 'Baseline
+    
+        For i% := 1 to NumBlocks%*2 step 2 do
+        OutCycles%[i%] := Freq*TrWdth[1]; 'number pulse repeats
+        OutCycles%[i%+1] := ((1.0 / TrFr[1])-TrWdth[1])*Rate%;
+        next
+        OutCycles%[Len(Out)-1] := RecoveryLen%; 'Recovery time
+        
+        OutType%[0] := 0; 'Baseline
+        For i% := 1 to NumBlocks%*2 step 2 do
+        OutType%[i%] := WaveType%+1; 'pulses
+        next
+        OutType%[Len(Out)-1] := 0; 'Recovery time
+        
+        TotalTime := BaselineLen%+MDur[1]+RecoveryLen%+1;
+    
+'*****************************************************************      
+        case ModeType%[0] = 3 then 'Gap stepped
+    
+          Var j% := 0;
+                NumSteps% := Mdur[1] / IntInt[1];
+                NumBlocks% := MDur[1] / (1.0/TrFr[1]); 'Total stim time / TRain frequency
+          Var NumPulseSections% := NumBlocks% / NumSteps%; 'Number of stims at the same amplitude 
+    
+        Resize Out[(NumBlocks%*2)+2]; 'We need baseline, pulses, gap and recovery times
+        Resize OutPoints%[Len(Out)];
+        Resize OutCycles%[Len(Out)];
+        Resize OutType%[Len(Out)];
+        
+    Out[0] := 0; 'Baseline
+        Var startLev := level/(DS5CurRange%/u1401Range%); 'Output amplitude;
+        'Out[1] := startLev 'Output amplitude;
+        Var TempIntInc := IntInc[1]/(DS5CurRange%/u1401Range%); 'Output change;
+    
+        Var k% := 0;    
+        For i% := 1 to NumBlocks%*2 step 2 do
+        Out[i%] := startLev+(TempIntInc*j%); k%+=1 ;
+        If k% = NumPulseSections% then
+            j% +=1; k% :=0;
+        endif    
+        next
+    
+        Out[Len(Out)-1] := 0; 'Recovery   
+        
+        OutPoints%[0] := Rate%; 'Baseline
+        For i% := 1 to NumBlocks%*2 step 2 do    
+        OutPoints%[i%] := Rate%*(1.0/Freq); 'points for one pulse
+        OutPoints%[i%+1] := 1; 'points for one pulse 'Problems with resolution
+        Next
+        OutPoints%[Len(Out)-1] := Rate%; 'Recovery time
+        
+        OutCycles%[0] := BaselineLen%; 'Baseline
+    
+        For i% := 1 to NumBlocks%*2 step 2 do
+        OutCycles%[i%] := Freq*TrWdth[1]; 'number pulse repeats
+        OutCycles%[i%+1] := ((1.0 / TrFr[1])-TrWdth[1])*Rate%;
+        next
+        OutCycles%[Len(Out)-1] := RecoveryLen%; 'Recovery time
+        
+        OutType%[0] := 0; 'Baseline
+        For i% := 1 to NumBlocks%*2 step 2 do
+        OutType%[i%] := WaveType%+1; 'pulses
+        next
+        OutType%[Len(Out)-1] := 0; 'Recovery time
+        
+        TotalTime := BaselineLen%+MDur[1]+RecoveryLen%+1;
+endcase
+    
+Return 1;
+end
+
+
+Func GetCurrentRange%();
+Var Scale%;
+
+docase
+Case DS5CurRange% = 10 then ' Current range = 10mA 
+     Scale% := 2;
+Case DS5CurRange% = 25 then ' Current range = 25mA 
+     Scale% := 5;
+Case DS5CurRange% = 50 then ' Current range = 50mA     
+     Scale% := 10;
+endcase 
+Return Scale%;
+end
+
+Func warnings%();
+
+'U1401open();
+'U1401Close();
+
+
+Return 1
+end
+
+'Func CheckButtons%();
+'PrintLog("\nCheckbuttons%");
+'
+'If samplestatus() = -1 or SampleStatus() = 3 then
+'    ToolbarSet(5, "START trial", Sample%);   'Link to function
+'    ToolbarEnable(4, 0);
+'    Samp% := 0;
+'else
+'    ToolbarSet(5, "STOP trial", Sample%);   'Link to function
+'    ToolbarEnable(4, 1);
+'    'ToolbarEnable(7, 1);
+'    Samp% := 1;
+'     
+'endif  
+'            
+'Return 1
+'end
+
+'Func VisitDlg%();
+'Var ok%, Dummy%, Dummy1%;
+''Set the variables above for initial values
+'DlgCreate("Visit details");  'Start new dialog
+'DlgString(1, "Participant ID:",10);
+'DlgInteger(2,"Number of pre-set stimulation profiles:",1,10,0,0,1);
+'DlgLabel(3,"Stimulation Profile Order");
+'
+'DlgGroup("", 0, 4, 120, 4);
+''
+'DlgLabel(4,"Profile 1:", 0, 5);
+'DlgList(5,10,"Item 1|Item 2|Item 3", 10, 26, 5);
+'
+'DlgLabel(6,"Pulse Frequency (Hz):", 0, 6);
+'DlgList(7, 10, "Item 1|Item 2|Item 3", 10, 26, 6);
+'DlgLabel(8,"Waveform:", 40, 6);
+'DlgList(9, 10, WaveType$[], 10, 63, 6);
+'DlgLabel(10,"Electrode type:", 80, 6);
+'DlgList(11, 10,ElecType$[], 10, 100, 6);
+'
+'DlgLabel(12,"Intensity increment (mA):", 0, 7);
+'DlgInteger(13,"", 1, 100, 26, 7);
+'DlgLabel(14,"Train Frequency(Hz):", 40, 7);
+'DlgInteger(15,"", 1, 100, 63, 7);
+'DlgLabel(16,"Max duration (S):", 80, 7);
+'DlgInteger(17,"", 1, 100, 100, 7);
+'
+''''''''''''''''''''''''''''''''''''''''''''''''''
+'DlgGroup("", 0, 8, 120, 4);
+'
+'DlgLabel(18,"Profile 2:", 0, 9);
+'DlgList(19,10,"Item 1|Item 2|Item 3", 10, 26, 9);
+'
+'DlgLabel(20,"Pulse Frequency (Hz):", 0, 10);
+'DlgList(21, 10, "Item 1|Item 2|Item 3", 10, 26, 10);
+'DlgLabel(22,"Waveform:", 40, 10);
+'DlgList(23, 10, WaveType$[], 10, 63, 10);
+'DlgLabel(24,"Electrode type:", 80, 10);
+'DlgList(25, 10,ElecType$[], 10, 100, 10);
+'
+'DlgLabel(26,"Intensity increment (mA):", 0, 11);
+'DlgInteger(27,"", 1, 100, 26, 11);
+'DlgLabel(28,"Train Frequency(Hz):", 40, 11);
+'DlgInteger(29,"", 1, 100, 63, 11);
+'DlgLabel(30,"Max duration (S):", 80, 11);
+'DlgInteger(31,"", 1, 100, 100, 11);
+'
+'''''''''''''''''''''''''''''''''''
+'
+'
+'DlgButton(0,"Cancel",0, -100, 13);
+'DlgButton(1,"Confirm",0, 100, 13);
+'ok% := DlgShow(ID$, NumStimProf%, Dummy%, Dummy%, VisitGrp1[], Dummy%, VisitGrp2[]);    'ok% is 0 if user cancels,  variables updated if not
+'
+'Return 1
+'end
+
+Func StartTrialDlg%();
+Var Dummy%, ok%;
+Var Grp1Col1% := 5, Grp1Col2% := 27, Grp2Col1% := 42, Grp2Col2% := 64;
+
+FilePathSet("", 3, "Folder to save data to.", 1);
+SavePath$ := FilePath$(3);
+
+Dlgcreate("Trial order");
+DlgAllow(1023, 0, ChangeStProf%);
+DlgText("Would you like to use the current stimulation profile or", 15, 1, 51);
+DlgText("move on to the next stimulation profile?", 20, 2, 49);
+GrpSel% :=  DlgGroup("Selected profile:", 1, 4, 35, 9);
+GrpNext% := DlgGroup("Next:", 38, 4, 35, 9);
+
+DlgText("Profile:", Grp1Col1%, 5, 10);
+DlgText("Pulse Frequency (Hz):", Grp1Col1%, 6, 10);
+DlgText("Waveform:", Grp1Col1%, 7, 10);
+DlgText("Electrode Type:", Grp1Col1%, 8, 10);
+DlgText("Intensity increment (mA):", Grp1Col1%, 9, 10);
+DlgText("Train Frequency (Hz):", Grp1Col1%, 10, 10);
+DlgText("Max duration (s):", Grp1Col1%, 11, 10);
+DlgText("Mode:", Grp1Col1%, 12, 10);
+
+CurDlgEnt%[0] := DlgText("________", Grp1Col2%, 5);
+CurDlgEnt%[1] := DlgText("________", Grp1Col2%, 6);
+CurDlgEnt%[2] := DlgText("________", Grp1Col2%, 7);
+CurDlgEnt%[3] := DlgText("________", Grp1Col2%, 8);
+CurDlgEnt%[4] := DlgText("______", Grp1Col2%, 9);
+CurDlgEnt%[5] := DlgText("________", Grp1Col2%, 10);
+CurDlgEnt%[6] := DlgText("________", Grp1Col2%, 11);
+CurDlgEnt%[7] := DlgText("__________________", Grp1Col2%-12, 12);
+
+DlgText("Profile:", Grp2Col1%, 5, 10);
+DlgText("Pulse Frequency (Hz):", Grp2Col1%, 6, 10);
+DlgText("Waveform:", Grp2Col1%, 7, 10);
+DlgText("Electrode Type:", Grp2Col1%, 8, 10);
+DlgText("Intensity increment (mA):", Grp2Col1%, 9, 10);
+DlgText("Train Frequency (Hz):", Grp2Col1%, 10, 10);
+DlgText("Max duration (s):", Grp2Col1%, 11, 10);
+DlgText("Mode:", Grp2Col1%, 12, 10);
+
+NextDlgEnt%[0] := DlgText("________", Grp2Col2%, 5);
+NextDlgEnt%[1] := DlgText("________", Grp2Col2%, 6);
+NextDlgEnt%[2] := DlgText("________", Grp2Col2%, 7);
+NextDlgEnt%[3] := DlgText("________", Grp2Col2%, 8);
+NextDlgEnt%[4] := DlgText("______", Grp2Col2%, 9);
+NextDlgEnt%[5] := DlgText("________", Grp2Col2%, 10);
+NextDlgEnt%[6] := DlgText("________", Grp2Col2%, 11);
+NextDlgEnt%[7] := DlgText("__________________", Grp2Col2%-12, 12);
+
+DlgButton(1, "Start", 0, 14, 14);
+DlgButton(2, "Next", NextP%, 51, 14);
+DlgButton(0, "Cancel", -1, 33, 15);
+
+Ok% := DlgShow(Dummy%);
+
+If GlobalIdx% = -1 then GlobalIdx% := 0 endif;
+
+Return Ok%
+end
+
+Func ChangeStProf%(Item%);
+
+Var Got% := GetSettings%(OutOrder%[GlobalIdx%]);  'Get CURRENT profile settings
+    DlgValue$(CurDlgEnt%[0], Print$("%d", OutOrder%[GlobalIdx%]));
+    DlgValue$(CurDlgEnt%[1], Print$("%.2f", Fr[1]));
+    DlgValue$(CurDlgEnt%[2], Print$("%s", WaveType$[WType%[1]+1]));
+    DlgValue$(CurDlgEnt%[3], Print$("%s", ElecType$[EType%[1]]));
+
+    If ModeType%[0] = 1 or ModeType%[0] = 2 then
+        DlgValue$(CurDlgEnt%[4], Print$("%.2f", IntInc[1]));
+        DlgValue$(CurDlgEnt%[5], Print$("%.2f", TrFr[1]));
+    else
+        DlgValue$(CurDlgEnt%[4], Print$("______"));
+        DlgValue$(CurDlgEnt%[5], Print$("________"));
+    endif    
+        DlgValue$(CurDlgEnt%[6], Print$("%d", MDur[1]));
+        DlgValue$(CurDlgEnt%[7], Print$("%s", ModeType$[ModeType%[0]]));
+    
+    If NumStimProf% > 1 then
+    
+    If GlobalIdx% = NumStimProf% -1 then
+        GlobalIdx% := -1;
+     endif
+Got% := GetSettings%(OutOrder%[GlobalIdx%+1]); 'Get NEXT profile settings        
+
+    DlgValue$(NextDlgEnt%[0], Print$("%d", OutOrder%[GlobalIdx%+1]));
+    DlgValue$(NextDlgEnt%[1], Print$("%.2f", Fr[1]));
+    DlgValue$(NextDlgEnt%[2], Print$("%s", WaveType$[WType%[1]+1]));
+    DlgValue$(NextDlgEnt%[3], Print$("%s", ElecType$[EType%[1]]));
+    If ModeType%[0] = 1 or ModeType%[0] = 2 then
+        DlgValue$(NextDlgEnt%[4], Print$("%.2f", IntInc[1]));
+        DlgValue$(NextDlgEnt%[5], Print$("%.2f", TrFr[1]));
+    Else
+        DlgValue$(NextDlgEnt%[4], Print$("______"));
+        DlgValue$(NextDlgEnt%[5], Print$("________"));
+    endif     
+    DlgValue$(NextDlgEnt%[6], Print$("%d", MDur[1]));
+    DlgValue$(NextDlgEnt%[7], Print$("%s", ModeType$[ModeType%[0]]));
+    DlgEnable(1, GrpNext%);
+    DlgEnable(1, -2);
+    'If GlobalIdx% = -1 then GlobalIdx% := 0 endif;
+else
+    DlgEnable(0, GrpNext%);
+    DlgEnable(0, -2);
+endif    
+
+Return 1
+end
+
+Func NextP%();
+'Var i%;
+'For i% := 0 to Len(CurDlgEnt%[]) -1 do
+'DlgValue$(CurDlgEnt%[i%], DlgValue$(NextDlgEnt%[i%]));
+'Next
+If GlobalIdx% +1 > NumStimProf% -1 then
+    GlobalIdx% := 0 
+else    
+    GlobalIdx% += 1;
+endif    
+ChangeStProf%(0);
+return 1
+end
+
+Func DetectSerialPorts%();
+Var i%, err%, List0%, Ok%;
+Var SerPorts%[0], SerPorts$[0];
+
+
+Err%:=SerialOpen(SerPorts%[], SerPorts$[]);
+If err% > 0 then
+            Resize SerPorts%[Err%];
+            Resize SerPorts$[Err%];
+Err%:=SerialOpen(SerPorts%[], SerPorts$[]);
+
+  
+
+
+    DlgCreate("Serial port select");  'Start new dialog
+    DlgText("Serial port - Temperature sensor", 0, 1);
+    DlgList(1, 25, SerPorts$[], 255, 35, 1);
+    DlgButton(0,"Cancel");
+    DlgButton(1,"OK");
+    ok% := DlgShow(list0%);    'ok% is 0 if user cancels,  variables updated if not 
+    
+ endif   
+    If Ok% < 0 or Len(SerPorts%[]) = 0 then    'If cancelled or no serial ports detected...
+    Message("No serial port defined. Continuing with no temperature sensor");
+'    Port% := -1;
+        Return -1;
+    endif
+    
+return SerPorts%[list0%]
+end
+
+Func GetTempData%();
+'Printlog("\nGetTempData%");
+If samplestatus() = 2 then
+    
+    
+    View(Samplehandle(0));
+    Var t := Maxtime();
+    If t > LTime then
+        Var ct% := Count(TMark%, Ltime, t);
+        If Ct% > 0 then
+            Var Time, i%, Code%[4], In$, Temp%[1];    'Temp is integer for discrete levels
+            Time := LTime;
+            
+            Var arr[ct%];
+            
+            For i% := 1 to ct% do
+                time := Nexttime(TMark%, time, code%[], in$);
+                
+                if code%[0] = 0 then
+                    
+                    If Left$(in$, 1) = "1" then
+                        Temp%[0] := Val(Right$(In$, 7));
+                        ChanWriteEvent(TempChan%, Time, Code%[], Temp%[0]);             
+                    endif
+                    
+                endif                    
+                Yield();
+            next                
+            Yield();
+            Ltime := t; 
+        endif 
+        
+    endif    
+endif
+                Yield();
+            
+Return 1
+end
+
+Func GetBaseMean%();
+Var Mean := ChanMeasure(DopFluxCh2%, 2, 0, Baselinelen%);
+Var SD := ChanMeasure(DopFluxCh2%, 12, 0, Baselinelen%);
+VirtualChan(SigChange%, Print$("Ch(%d)<%f-%f", DopFluxCh2%, Mean, SD), 0, 0.01, 0);  'Edit virtual channel
+Return 1
+end
+
+Func FileSaving%(Opt%, State%);
+SampleStop();
+NumberDigMarks%(DigMk%);
+    FileSaveAs(Fname$, -1);
+    Data% := -1;
+    ToolbarSet(5, "Start trial", Sample%);   'Link to function
+'FileSaveAs(WindowTitle$(), -1);
+State% := -1;
+    Tidy%(State%);
+
+
+Return 1
+end
+
+Func NumberDigMarks%(DigMk%);
+View(data%);
+Var Ct% := Count(DigMk%, 0, Maxtime());
+If Ct% <= 0 then return 1 endif
+
+Var DigTemp% := Memchan(8, 32);
+DrawMode(DigTemp%, 14, 3, 0, 0); 'Set Text
+MarkShow(DigTemp%, 0, 0); 'Set marker to display and mode
+Chanshow(DigTemp%);
+
+Var DigTimes[ct%], Code%[4];
+Var EndT := Maxtime();
+Arrconst(Code%[], 0);
+Chandata(DigMk%, DigTimes[], 0, EndT);
+
+
+Var i% := 0;
+For i% := 0 to ct%-1 do
+        Memsetitem(DigTemp%, 0, DigTimes[i%], Code%[], Print$("%d Amp = %,2f", i%+1, Out[i%]));
+next 
+
+Var list%[32];
+Chanlist(List%[], 128);
+if List%[0] > 0 then
+    MemSave(DigTemp%, List%[1], 0);
+    DrawMode(List%[1], 14, 3, 0, 0); 'Set Text
+    MarkShow(List%[1], 0, 0); 'Set marker to display and mode
+    Chanshow(List%[1]);
+endif    
+Return 1
+end
+
+Func TidyData%();
+
+If SampleStatus() = -1 then
+'If ViewKind(DataDup%) = 0 then
+'    View(DataDup%);
+'    FileClose(0, -1);
+'endif
+
+If ViewKind(Data%) = 0 then
+    View(Data%);
+    Fileclose(1, 0);
+    endif
+ View(app(1)).WindowVisible(1);   
+endif
+
+Return 1
+end
+
+Func Quit%();
+RestoreApps();
+
+if View(App(1)).WindowVisible() = 0 then 'Main toolbar
+    View(App(1)).WindowVisible(1);
+endif 
+
+if View(App(6)).WindowVisible() = 0 then 'Script bar
+    View(App(6)).WindowVisible(1);
+endif 
+
+Halt;
+
+Return 0;
+end
+
